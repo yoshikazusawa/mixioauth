@@ -1,0 +1,7 @@
+Ti.include('mixioauth.js');
+
+var $auth = createAuthorizer();
+
+$auth(function(accessToken) {
+    // call something mixi graph api with access token.
+});
