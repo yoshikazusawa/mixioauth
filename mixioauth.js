@@ -1,5 +1,6 @@
 // TODO: handling stateChanged, handling errors
-var createAuthorizer = function() {
+Titanium.Mixi = {};
+var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
     
     var settings = JSON.parse(
         Titanium.Filesystem.getFile(
@@ -29,11 +30,11 @@ var createAuthorizer = function() {
     };
     
     var getAuthCode = function(onAuthorize) {
-        authWindow = win1; // TODO: changed currentWindow
+        var authWindow = win1; // TODO: changed currentWindow
         var url = "https://mixi.jp/connect_authorize.pl?" + toQueryString({
             client_id    : settings.consumerKey,
-            response_type: 'code',
-            scope        : settings.scope
+            scope        : settings.scope,
+            response_type: 'code'
         });
         var authView = Ti.UI.createWebView({ url: url });
         authView.addEventListener('load', function(evt) {
@@ -103,4 +104,20 @@ var createAuthorizer = function() {
             onFinish(accessToken);
         }
     };
+};
+
+Titanium.Mixi.callApi = function(uri, onSuccess, onError) {
+    createAuthorizer()(function(accessToken) {
+        var client = Titanium.Network.createHTTPClient();
+        client.open('GET', uri);
+        client.setRequestHeader("Authorization",   "OAuth " + accessToken);
+        client.onload = function() {
+            onSuccess(JSON.parse(this.responseText));
+        };
+        client.onerror = function(error) {
+            onError ? onError(this.responseText)
+                    : throw(this.resopnseText);
+        };
+        client.send();
+    }, onError);
 };

@@ -1,7 +1,12 @@
 Ti.include('mixioauth.js');
 
 var $auth = createAuthorizer();
-
 $auth(function(accessToken) {
     // call something mixi graph api with access token.
+});
+
+// or direct uri access
+var apiUri = 'http://api.mixi-platform.com/2/voice/statuses/friends_timeline?format=json';
+Ti.Mixi.callApi(apiUri, function(json) {
+    // render json
 });
