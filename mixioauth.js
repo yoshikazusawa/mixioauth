@@ -1,14 +1,21 @@
 // TODO: handling stateChanged, handling errors
-Titanium.Mixi = {};
-var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
+TiMixi = {};
+TiMixi.requestToken = function(param, onLoad, onError) {
+    var client = Titanium.Network.createHTTPClient();
+    client.open('POST', 'https://secure.mixi-platform.com/2/token');
+    client.setRequestHeader("Content-Type",   "application/x-www-form-urlencoded");
+    client.onload = function() {
+        onLoad(JSON.parse(this.responseText));
+    };
+    client.onerror = function(error) {
+        onError(this.responseText);
+    };
+    client.send(param);
+};
+
+var createAuthorizer = TiMixi.createAuthorizer = function() {
     
-    var settings = JSON.parse(
-        Titanium.Filesystem.getFile(
-            Titanium.Filesystem.resourcesDirectory, 
-            'settings.json'
-        ).read().text
-    );
-    
+    var settings = TiMixi.Util.readJSONFile('settings.json');
     var accessToken ;
     var refreshToken;
     var dueTime     ;
@@ -21,17 +28,9 @@ var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
         return (Date.now() >= (dueTime - 20)); // 20: padded time
     };
     
-    var toQueryString = function(obj) {
-        var results = [];
-        for (var key in obj) 
-           if (obj.hasOwnProperty(key)) 
-               results.push(encodeURIComponent(key) + '=' + encodeURIComponent(obj[key]));
-        return results.join('&');
-    };
-    
-    var getAuthCode = function(onAuthorize) {
+    var getAuthCode = function(onAuthorize, onError) {
         var authWindow = win1; // TODO: changed currentWindow
-        var url = "https://mixi.jp/connect_authorize.pl?" + toQueryString({
+        var url = "https://mixi.jp/connect_authorize.pl?" + TiMixi.Util.toQueryString({
             client_id    : settings.consumerKey,
             scope        : settings.scope,
             response_type: 'code'
@@ -42,25 +41,15 @@ var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
             if (matched) {
                 onAuthorize(matched[1]);
                 authWindow.remove(authView);
+            } 
+            else {
+                //onError('authentication failed');
             }
         });
         authWindow.add(authView);
     };
     
-    var request = function(param, onLoad) {
-        var client = Titanium.Network.createHTTPClient();
-        client.open('POST', 'https://secure.mixi-platform.com/2/token');
-        client.setRequestHeader("Content-Type",   "application/x-www-form-urlencoded");
-        client.onload = function() {
-            onLoad(JSON.parse(this.responseText));
-        };
-        client.onerror = function(error) {
-            throw(this.responseText);
-        };
-        client.send(param);
-    };
-    
-    var getToken = function(authCode, onGetToken) {
+    var getToken = function(authCode, onGetToken, onError) {
         var param  = {
             grant_type   : 'authorization_code', 
             client_id    : settings.consumerKey,
@@ -68,17 +57,17 @@ var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
             redirect_uri : settings.redirectUri,
             code         : authCode
         };
-        request(param, onGetToken);
+        TiMixi.requestToken(param, onGetToken, onError);
     };
     
-    var updateToken = function(onGetToken) {
+    var updateToken = function(onGetToken, onError) {
         var param  = {
             grant_type   : 'refresh_token', 
             client_id    : settings.consumerKey,
             client_secret: settings.consumerSecret,
             refresh_token: refreshToken
         };
-        request(param, onGetToken);
+        TiMixi.requestToken(param, onGetToken, onError);
     };
     
     var setTokenData = function(json) {
@@ -96,28 +85,99 @@ var createAuthorizer = Titanium.Mixi.createAuthorizer = function() {
         
         if (!isInitialized()) {
             getAuthCode(function(authCode) {
-                getToken(authCode, onTakeToken);
-            });
+                getToken(authCode, onTakeToken, onError);
+            }, onError);
         } else if (hasExpired()){
-            updateToken(onTakeToken);
+            updateToken(onTakeToken, onError);
         } else {
             onFinish(accessToken);
         }
     };
 };
 
-Titanium.Mixi.callApi = function(uri, onSuccess, onError) {
-    createAuthorizer()(function(accessToken) {
-        var client = Titanium.Network.createHTTPClient();
-        client.open('GET', uri);
-        client.setRequestHeader("Authorization",   "OAuth " + accessToken);
-        client.onload = function() {
-            onSuccess(JSON.parse(this.responseText));
+TiMixi.Util = (function(){
+    var slice = Array.prototype.slice.call;
+    var each  = function(obj, iterator) {
+        if (!obj) return;
+        for (var key in obj)
+            if (obj.hasOwnProperty(key)) iterator(key, obj[key]);
+    };
+    var bind = function(func, context) {
+        return function() {
+            func.apply(context, slice(arguments));
         };
-        client.onerror = function(error) {
-            onError ? onError(this.responseText)
-                    : throw(this.resopnseText);
-        };
-        client.send();
-    }, onError);
-};
+    };
+    
+    var callApi = function(method, uri, header, param, onSuccess, onError) {
+        TiMixi.createAuthorizer()(function(accessToken) {
+            var client = Titanium.Network.createHTTPClient();
+            client.open(method, uri);
+            client.setRequestHeader("Authorization",   "OAuth " + accessToken);
+            each(header, bind(client.setRequestHeader, client));
+            client.onload = function() {
+                onSuccess(JSON.parse(this.responseText));
+            };
+            client.onerror = onError;
+            client.send(param);
+        }, onError);
+    };
+    
+    var callMap = function(obj) {
+        var result = {};
+        each(obj, function(key, value) {
+            result[key] = function() {
+                var res = obj[key].apply(null, slice(arguments));
+                callApi.apply(null, res.concat(slice(arguments, -3)));
+            };
+        });
+        return result;
+    };
+    
+    var toQueryString = function(obj) {
+        var results = [];
+        for (var key in obj) 
+           if (obj.hasOwnProperty(key)) 
+               results.push(encodeURIComponent(key)
+                   + '=' + encodeURIComponent(obj[key]));
+        return results.join('&');
+    };
+    var readJSONFile = function(fileName) {
+        return JSON.parse(
+            Titanium.Filesystem.getFile(
+                Titanium.Filesystem.resourcesDirectory, 
+                fileName
+            ).read().text
+        );
+    };
+    return {
+        each   : each,
+        bind   : bind,
+        callApi: callApi,
+        callMap: callMap,
+        toQueryString: toQueryString,
+        readJSONFile: readJSONFile
+    }
+})();
+
+
+TiMixi.Voice = (function() {
+    var baseUri = 'http://api.mixi-platform.com/2/voice';
+    var join = function() { [baseUri].concat(arguments).join(''); };
+    return TiMixi.Util.callMap({
+        readUserTimeline: function(userId) {
+            return ['GET', join('/statuses/[User-ID]/user_timeline'.replace('[User-ID]', userId))];
+        },
+        readFriendsTimeline: function(groupId) {
+            return ['GET', join('/statuses/friends_timeline', groupId ? "/groupId" : '')];
+        },
+        readStatus: function(postId) {
+            return ['GET', join('/statuses/show/', postId)];
+        },
+        readReplies: function(postId) {
+            return ['GET', join('/replies/show/', postId)];
+        },
+        postStatus: function(body) {
+            return ['POST', join('/statuses/update')];
+        }
+    });
+})();
