@@ -96,24 +96,36 @@ var createAuthorizer = TiMixi.createAuthorizer = function() {
 };
 
 TiMixi.Util = (function(){
-    var slice = Array.prototype.slice.call;
+    var toArray = function(list) { return Array.prototype.slice.call(list); };
     var each  = function(obj, iterator) {
-        if (!obj) return;
         for (var key in obj)
             if (obj.hasOwnProperty(key)) iterator(key, obj[key]);
     };
+    var keys = function(obj) {
+        var keys = [];
+        each(obj, function(key){ keys.push(key); });
+        return keys;
+    };
     var bind = function(func, context) {
         return function() {
-            func.apply(context, slice(arguments));
+            func.apply(context, toArray(arguments));
         };
     };
     
-    var callApi = function(method, uri, header, param, onSuccess, onError) {
+    var headerOf = {
+        form : 'application/x-www-form-urlencoded',
+        multi: 'multipart/form-data',
+        json : 'application/json',
+        jpeg : 'image/jpeg',
+        png  : 'image/png'
+    };
+    var callApi = function(method, uri, type, param, onSuccess, onError) {
         TiMixi.createAuthorizer()(function(accessToken) {
             var client = Titanium.Network.createHTTPClient();
             client.open(method, uri);
-            client.setRequestHeader("Authorization",   "OAuth " + accessToken);
-            each(header, bind(client.setRequestHeader, client));
+            client.setRequestHeader('Authorization',   'OAuth ' + accessToken);
+            if (type !== null) 
+                client.setRequestHeader('Content-type', headerOf[type]);
             client.onload = function() {
                 onSuccess(JSON.parse(this.responseText));
             };
@@ -122,24 +134,43 @@ TiMixi.Util = (function(){
         }, onError);
     };
     
-    var callMap = function(obj) {
-        var result = {};
-        each(obj, function(key, value) {
-            result[key] = function() {
-                var res = obj[key].apply(null, slice(arguments));
-                callApi.apply(null, res.concat(slice(arguments, -3)));
-            };
-        });
-        return result;
+    var isString = function(obj) {
+        return !!(obj === '' || (obj && obj.charCodeAt && obj.substr));
+    };
+    var isNumber = function(obj) {
+        return !!(obj === 0 || (obj && obj.toExponential && obj.toFixed));
+    };
+    var split = function(args) {
+        var i = 0;
+        while (isString(args[i]) || isNumber(args[i])) ++i;
+        return [
+            args.slice(0, i),
+            args.slice(i)
+        ];
     };
     
+    var pattern = /^(post|get|delete|put)/;
+    var callMap = function(obj) {
+        return keys(obj).reduce(function(result, key) {
+            result[key] = function() {
+                var method   = pattern.exec(key)[1].toUpperCase();
+                var splitted = split(toArray(arguments));
+                callApi.apply(null, 
+                    [method]
+                    .concat(obj[key].apply(null, splitted[0]))
+                    .concat(splitted[1])
+                );
+            };
+            return result;
+        }, {});
+    };
+    
+    var encode = encodeURIComponent;
     var toQueryString = function(obj) {
-        var results = [];
-        for (var key in obj) 
-           if (obj.hasOwnProperty(key)) 
-               results.push(encodeURIComponent(key)
-                   + '=' + encodeURIComponent(obj[key]));
-        return results.join('&');
+        return keys(obj).reduce(function(results, key) {
+            results.push(encode(key) + '=' + encode(obj[key]));
+            return results;
+        }, []).join('&');
     };
     var readJSONFile = function(fileName) {
         return JSON.parse(
@@ -156,28 +187,61 @@ TiMixi.Util = (function(){
         callMap: callMap,
         toQueryString: toQueryString,
         readJSONFile: readJSONFile
-    }
+    };
 })();
 
 
 TiMixi.Voice = (function() {
-    var baseUri = 'http://api.mixi-platform.com/2/voice';
-    var join = function() { [baseUri].concat(arguments).join(''); };
+    var base    = 'http://api.mixi-platform.com/2/voice';
+    var build   = function() { 
+        return [base].concat(Array.prototype.slice.call(arguments)).join('/'); 
+    };
+
     return TiMixi.Util.callMap({
-        readUserTimeline: function(userId) {
-            return ['GET', join('/statuses/[User-ID]/user_timeline'.replace('[User-ID]', userId))];
+        getUserTimeline: function(userId) {
+            var uri = build('statuses/[User-ID]/user_timeline'.replace('[User-ID]', userId));
+            return [uri, null];
         },
-        readFriendsTimeline: function(groupId) {
-            return ['GET', join('/statuses/friends_timeline', groupId ? "/groupId" : '')];
+        getFriendsTimeline: function(groupId) {
+            var group = groupId ? '/' + groupId : '';
+            var uri   = build('statuses/friends_timeline', group);
+            return [uri, null];
         },
-        readStatus: function(postId) {
-            return ['GET', join('/statuses/show/', postId)];
+        getStatus: function(postId) {
+            var uri = build('statuses/show', postId);
+            return [uri, null];
         },
-        readReplies: function(postId) {
-            return ['GET', join('/replies/show/', postId)];
+        getReplies: function(postId) {
+            var uri = build('replies/show', postId);
+            return [uri, null];
         },
-        postStatus: function(body) {
-            return ['POST', join('/statuses/update')];
+        getFavorites: function(postId) {
+            var uri = build('favorites/show', postId);
+            return [uri, null];
+        },
+        postStatus: function() {
+            var uri = build('statuses/update');
+            return [uri, 'form'];
+        },
+        postReply: function(postId) {
+            var uri = build('replies/update', postId);
+            return [uri, 'form'];
+        },
+        postFavorite: function(postId) {
+            var uri = build('favorites/create', postId);
+            return [uri, null];
+        },
+        deleteStatus: function(postId) {
+            var uri = build('statuses/destroy');
+            return [uri, null];
+        },
+        deleteReply: function(postId, commentId) {
+            var uri = build('replies/destroy', postId, commentId);
+            return [uri, null];
+        },
+        deleteFavorite: function(postId, userId) {
+            var uri = build('favorites/destroy', postid, commentId);
+            return [uri, null];
         }
     });
 })();
